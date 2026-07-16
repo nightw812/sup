@@ -24,6 +24,21 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def ticket_created_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"user_close:{ticket_id}")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def user_tickets_list_keyboard(tickets) -> InlineKeyboardMarkup:
+    buttons = []
+    for t in tickets:
+        if t.status.value != "closed":
+            buttons.append(
+                [InlineKeyboardButton(text=f"🔒 Закрыть #{t.id}", callback_data=f"user_close:{t.id}")]
+            )
+    return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+
+
 def ticket_queue_item_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text="✅ Взять в работу", callback_data=f"take:{ticket_id}")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
