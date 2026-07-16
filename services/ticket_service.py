@@ -98,6 +98,28 @@ async def add_message(
     return message
 
 
+async def close_ticket_by_user(session: AsyncSession, ticket_id: int, user: User) -> Ticket | None:
+    """Закрытие тикета самим автором. Возвращает None, если тикет чужой или уже закрыт."""
+    result = await session.execute(
+        select(Ticket).options(selectinload(Ticket.operator)).where(Ticket.id == ticket_id)
+    )
+    ticket = result.scalar_one_or_none()
+    if ticket is None or ticket.user_id != user.id or ticket.status == TicketStatus.CLOSED:
+        return None
+
+    await close_ticket(session, ticket, reason="Закрыт пользователем")
+    return ticket
+
+
+async def get_ticket_with_relations(session: AsyncSession, ticket_id: int) -> Ticket | None:
+    result = await session.execute(
+        select(Ticket)
+        .options(selectinload(Ticket.user), selectinload(Ticket.operator))
+        .where(Ticket.id == ticket_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_user_tickets(session: AsyncSession, user: User) -> list[Ticket]:
     result = await session.execute(
         select(Ticket).where(Ticket.user_id == user.id).order_by(Ticket.created_at.desc())
