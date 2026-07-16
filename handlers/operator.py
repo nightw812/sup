@@ -138,4 +138,4 @@ async def route_operator_message_to_user(message: Message, state: FSMContext) ->
         user_telegram_id = ticket.user.telegram_id if ticket.user else None
 
     if user_telegram_id:
-        await message.bot.send_message(user_telegram_id, f"💬 Оператор: {message.text}")
+        await message.copy_to(chat_id=user_telegram_id)
