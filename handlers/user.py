@@ -3,17 +3,24 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from database.engine import async_session
 from database.models import SenderType, Ticket, TicketStatus, User
 from services.ticket_service import (
     add_message,
+    close_ticket_by_user,
     create_ticket,
     get_or_create_user,
     get_user_tickets,
 )
-from utils.keyboards import TICKET_CATEGORIES, categories_keyboard, main_menu_keyboard
+from utils.keyboards import (
+    TICKET_CATEGORIES,
+    categories_keyboard,
+    main_menu_keyboard,
+    ticket_created_keyboard,
+    user_tickets_list_keyboard,
+)
 from utils.states import TicketCreation
 
 router = Router(name="user")
@@ -66,7 +73,9 @@ async def subject_entered(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"✅ Тикет #{ticket.id} создан!\n"
         "Опишите вашу проблему подробнее — оператор скоро подключится к диалогу.\n\n"
-        "Все ваши следующие сообщения будут отправляться в этот тикет, пока он не закрыт."
+        "Все ваши следующие сообщения будут отправляться в этот тикет, пока он не закрыт. "
+        "Закрыть тикет можно в любой момент кнопкой ниже.",
+        reply_markup=ticket_created_keyboard(ticket.id),
     )
     # TODO: уведомить операторов о новом тикете (например, в отдельный чат/группу)
 
@@ -83,8 +92,38 @@ async def my_tickets(callback: CallbackQuery) -> None:
         await callback.message.answer("У вас пока нет тикетов.")
     else:
         lines = [f"#{t.id} [{t.status.value}] — {t.subject}" for t in tickets]
-        await callback.message.answer("Ваши тикеты:\n" + "\n".join(lines))
+        await callback.message.answer(
+            "Ваши тикеты:\n" + "\n".join(lines),
+            reply_markup=user_tickets_list_keyboard(tickets),
+        )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user_close:"))
+async def user_close_ticket(callback: CallbackQuery) -> None:
+    ticket_id = int(callback.data.split(":", 1)[1])
+
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == callback.from_user.id))
+        user = result.scalar_one_or_none()
+        if user is None:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+
+        ticket = await close_ticket_by_user(session, ticket_id, user)
+        if ticket is None:
+            await callback.answer("Этот тикет уже закрыт или не найден.", show_alert=True)
+            return
+
+        operator_telegram_id = ticket.operator.telegram_id if ticket.operator else None
+
+    await callback.answer("Тикет закрыт.")
+    await callback.message.answer(f"🔒 Тикет #{ticket_id} закрыт вами.\nЕсли нужна ещё помощь — /start")
+
+    if operator_telegram_id:
+        await callback.bot.send_message(
+            operator_telegram_id, f"ℹ️ Пользователь закрыл тикет #{ticket_id}."
+        )
 
 
 @router.message(F.text | F.photo | F.document, TicketCreation.entering_description)
@@ -110,7 +149,9 @@ async def route_user_message_to_ticket(message: Message, state: FSMContext) -> N
             )
             return
 
-        ticket_result = await session.execute(select(Ticket).where(Ticket.id == user.active_ticket_id))
+        ticket_result = await session.execute(
+            select(Ticket).options(selectinload(Ticket.operator)).where(Ticket.id == user.active_ticket_id)
+        )
         ticket = ticket_result.scalar_one_or_none()
         if ticket is None or ticket.status == TicketStatus.CLOSED:
             user.active_ticket_id = None
@@ -129,11 +170,15 @@ async def route_user_message_to_ticket(message: Message, state: FSMContext) -> N
             attachment_type=attachment_type,
         )
 
-    # переслать сообщение назначенному оператору, если он уже взял тикет
-    if ticket.operator_id is not None:
-        # NOTE: для отправки нужен telegram_id оператора и доступ к bot instance —
-        # прокидывается через message.bot, здесь достаточно message.bot.send_message(...)
-        pass  # реализуется в связке с operator.py / общим notify-сервисом
+        operator_telegram_id = ticket.operator.telegram_id if ticket.operator else None
+
+    # пересылаем оператору любое содержимое как есть (текст/фото/документ) через copy_to
+    if operator_telegram_id:
+        await message.copy_to(chat_id=operator_telegram_id)
+    else:
+        await message.answer(
+            "Сообщение сохранено в тикете. Оператор ещё не подключился — ожидайте."
+        )
 
 
 def _extract_attachment(message: Message) -> tuple[str | None, str | None]:
