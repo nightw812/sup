@@ -72,6 +72,7 @@ class Ticket(Base):
     close_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="tickets", foreign_keys=[user_id])
+    operator: Mapped["Operator | None"] = relationship("Operator", foreign_keys=[operator_id])
     messages: Mapped[list["Message"]] = relationship(
         "Message", back_populates="ticket", order_by="Message.created_at"
     )
